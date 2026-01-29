@@ -9,11 +9,10 @@ on:
 jobs:
   claude-qa:
     if: |
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       (contains(github.event.comment.body, '@claude-qa') || contains(github.event.comment.body, '@Claude-QA'))) ||
-      (github.event_name == 'pull_request_review_comment' &&
-       (contains(github.event.comment.body, '@claude-qa') || contains(github.event.comment.body, '@Claude-QA')))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
 
     runs-on: ubuntu-latest
     permissions:
@@ -31,3 +30,244 @@ jobs:
           else
             echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: refs/pull/${{ steps.pr-number.outputs.number }}/head
+          fetch-depth: 0
+
+      - name: Setup DDEV
+        uses: ddev/github-action-setup-ddev@v1
+        with:
+          autostart: false
+
+      - name: Start DDEV project
+        run: |
+          ddev start
+
+      - name: Get PR details
+        id: pr-info
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=${{ steps.pr-number.outputs.number }}
+          PR_BODY=$(gh pr view $PR_NUMBER --json body -q .body)
+          echo "pr_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$PR_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run Claude QA Testing
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPOSITORY: ${{ github.repository }}
+            PR NUMBER: ${{ steps.pr-number.outputs.number }}
+
+            PR DESCRIPTION:
+            ${{ steps.pr-info.outputs.pr_body }}
+
+            SITE URL: https://github-workflow.ddev.site
+
+            ## Your Task
+
+            You are a QA engineer testing this pull request from a USER PERSPECTIVE.
+            DO NOT look at the code - test the feature as described in the PR description.
+
+            ## IMPORTANT: Screenshot Instructions
+            
+            When taking screenshots during testing:
+            1. **Save ALL screenshots to**: `/tmp/claude-qa-screenshots/`
+            2. **Use simple numbered names**: `01.png`, `02.png`, `03.png`, etc.
+            3. **Limit to 8-10 screenshots** (most important ones)
+            4. **Take screenshots of**:
+               - Initial page state
+               - Key functionality being tested
+               - Any errors or issues found
+               - Before/after states
+            5. **Keep file sizes reasonable** (< 2MB per image if possible)
+
+            Use Playwright MCP tools to:
+
+            ### 1. FUNCTIONAL TESTING
+            - Verify the feature works as described in the PR
+            - Test all user interactions mentioned
+            - Verify data accuracy and completeness
+            - Test edge cases (empty data, special characters, etc.)
+
+            ### 2. UI/UX TESTING
+            - Verify links are visible and clearly labeled
+            - Check error messages are helpful
+            - Test responsiveness if applicable
+            - Verify output format is user-friendly
+
+            ## Testing Workflow
+
+            1. Navigate to the site at https://github-workflow.ddev.site
+            2. The page should be accessible.
+            4. Take screenshots of key interactions
+            5. Document any issues found
+
+            ## Reporting Requirements
+            
+            After testing, create a report at `/tmp/claude-qa-screenshots/REPORT.md`:
+            
+            Structure your report like this:
+            
+            ```markdown
+            - ✅ Tests that passed
+            - ❌ Issues found (with severity: Critical/High/Medium/Low)
+            - 📸 Screenshots (01.png, 02.png,...) of problems.
+            - 💡 Recommendations for fixes
+            ```
+
+            Also create `/tmp/claude-qa-screenshots/SCREENSHOTS.txt` with one line per screenshot describing what it shows:
+            ```
+            01.png|Homepage initial load
+            02.png|Login form with valid credentials
+            03.png|Error message for invalid input
+            ```
+
+            **DO NOT post comments using gh pr comment** - the workflow handles this.
+
+          claude_args: |
+            --max-turns 100
+            --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--isolated","--caps=vision,testing"]}}}'
+            --allowed-tools "mcp__playwright__browser_navigate,mcp__playwright__browser_navigate_back,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_snapshot,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_console_messages,mcp__playwright__browser_wait_for,mcp__playwright__browser_hover,mcp__playwright__browser_resize,mcp__playwright__browser_drag,mcp__playwright__browser_select_option,mcp__playwright__browser_press_key,mcp__playwright__browser_tabs,mcp__playwright__browser_file_upload,mcp__playwright__browser_fill_form,mcp__playwright__browser_handle_dialog,mcp__playwright__browser_close,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:--name-only),Write"
+
+      - name: Upload images to GitHub and create comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /tmp/claude-qa-screenshots
+          
+          # Check if report exists
+          if [ ! -f "REPORT.md" ]; then
+            echo "No report found"
+            exit 0
+          fi
+          
+          # Create Python script to upload images
+          cat > /tmp/upload_images.py << 'PYTHON_SCRIPT'
+          import os
+          import sys
+          import requests
+          import json
+          import base64
+          
+          github_token = os.environ['GH_TOKEN']
+          repo = "${{ github.repository }}"
+          pr_number = "${{ steps.pr-number.outputs.number }}"
+          
+          # Headers for GitHub API
+          headers = {
+              'Authorization': f'token {github_token}',
+              'Accept': 'application/vnd.github.v3+json'
+          }
+          
+          screenshot_dir = '/tmp/claude-qa-screenshots'
+          
+          # Read report
+          with open(f'{screenshot_dir}/REPORT.md', 'r') as f:
+              report = f.read()
+          
+          # Read screenshot descriptions if available
+          screenshot_descriptions = {}
+          desc_file = f'{screenshot_dir}/SCREENSHOTS.txt'
+          if os.path.exists(desc_file):
+              with open(desc_file, 'r') as f:
+                  for line in f:
+                      if '|' in line:
+                          filename, desc = line.strip().split('|', 1)
+                          screenshot_descriptions[filename] = desc
+          
+          # Start building comment
+          comment_body = report + "\n\n---\n\n### 📸 Screenshots\n\n"
+          
+          # Find all screenshots
+          screenshots = sorted([f for f in os.listdir(screenshot_dir) 
+                               if f.endswith(('.png', '.jpg', '.jpeg'))])
+          
+          if not screenshots:
+              comment_body += "_No screenshots were captured._\n"
+          else:
+              for screenshot in screenshots:
+                  filepath = os.path.join(screenshot_dir, screenshot)
+                  
+                  # Read image file
+                  with open(filepath, 'rb') as img_file:
+                      img_data = img_file.read()
+                  
+                  # Upload to GitHub's asset upload endpoint
+                  # We'll use the issue comments media upload endpoint
+                  upload_url = f'https://api.github.com/repos/{repo}/issues/{pr_number}/assets'
+                  
+                  files = {
+                      'file': (screenshot, img_data, 'image/png')
+                  }
+                  
+                  try:
+                      # Upload image
+                      response = requests.post(
+                          upload_url,
+                          headers={
+                              'Authorization': f'token {github_token}',
+                              'Accept': 'application/vnd.github.v3+json'
+                          },
+                          files=files
+                      )
+                      
+                      if response.status_code == 201:
+                          asset_data = response.json()
+                          image_url = asset_data.get('url') or asset_data.get('browser_download_url')
+                          
+                          # Add to comment
+                          desc = screenshot_descriptions.get(screenshot, screenshot)
+                          comment_body += f"#### {desc}\n\n"
+                          comment_body += f"![{desc}]({image_url})\n\n"
+                      else:
+                          print(f"Failed to upload {screenshot}: {response.status_code}")
+                          print(response.text)
+                          # Fallback: reference the file
+                          desc = screenshot_descriptions.get(screenshot, screenshot)
+                          comment_body += f"- `{screenshot}`: {desc}\n"
+                  except Exception as e:
+                      print(f"Error uploading {screenshot}: {e}")
+                      desc = screenshot_descriptions.get(screenshot, screenshot)
+                      comment_body += f"- `{screenshot}`: {desc}\n"
+              
+              # Add artifact download link
+              run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              comment_body += f"\n---\n\n**📦 Download all screenshots**: [Workflow Artifacts]({run_url}#artifacts)\n"
+          
+          # Post comment
+          comment_url = f'https://api.github.com/repos/{repo}/issues/{pr_number}/comments'
+          comment_data = {'body': comment_body}
+          
+          response = requests.post(comment_url, headers=headers, json=comment_data)
+          
+          if response.status_code == 201:
+              print("Comment posted successfully!")
+          else:
+              print(f"Failed to post comment: {response.status_code}")
+              print(response.text)
+              sys.exit(1)
+          PYTHON_SCRIPT
+          
+          # Install requests if needed
+          pip3 install requests --quiet
+          
+          # Run the upload script
+          python3 /tmp/upload_images.py
+
+      - name: Upload screenshots as artifacts (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-screenshots-pr-${{ steps.pr-number.outputs.number }}
+          path: /tmp/claude-qa-screenshots/
+          retention-days: 30
+          if-no-files-found: ignore
