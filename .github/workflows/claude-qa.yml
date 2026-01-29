@@ -117,7 +117,7 @@ jobs:
 
             ## Reporting Requirements
             
-            After testing, create a report at `/tmp/claude-qa-screenshots/REPORT.md`:
+            After testing, create a report at `REPORT.md`:
             
             Structure your report like this:
             
@@ -128,7 +128,7 @@ jobs:
             - 💡 Recommendations for fixes
             ```
 
-            Also create `/tmp/claude-qa-screenshots/SCREENSHOTS.txt` with one line per screenshot describing what it shows:
+            Also create `SCREENSHOTS.txt` with one line per screenshot describing what it shows:
             ```
             01.png|Homepage initial load
             02.png|Login form with valid credentials
