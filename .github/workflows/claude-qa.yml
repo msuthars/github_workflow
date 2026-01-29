@@ -141,6 +141,17 @@ jobs:
             --max-turns 100
             --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--isolated","--caps=vision,testing"]}}}'
             --allowed-tools "mcp__playwright__browser_navigate,mcp__playwright__browser_navigate_back,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_snapshot,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_console_messages,mcp__playwright__browser_wait_for,mcp__playwright__browser_hover,mcp__playwright__browser_resize,mcp__playwright__browser_drag,mcp__playwright__browser_select_option,mcp__playwright__browser_press_key,mcp__playwright__browser_tabs,mcp__playwright__browser_file_upload,mcp__playwright__browser_fill_form,mcp__playwright__browser_handle_dialog,mcp__playwright__browser_close,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:--name-only),Write"
+    
+      - name: Copy screenshots from Playwright MCP directory
+        if: always()
+        run: |
+          # Copy all screenshots from .playwright-mcp
+          find .playwright-mcp -type f \( -name "*.png" -o -name "*.jpg" \) \
+            -exec cp {} /tmp/claude-qa-screenshots/ \;
+          
+          # Count and log
+          SCREENSHOT_COUNT=$(ls -1 /tmp/claude-qa-screenshots/*.png 2>/dev/null | wc -l)
+          echo "Copied $SCREENSHOT_COUNT screenshots"
 
       - name: Upload images to GitHub and create comment
         if: always()
