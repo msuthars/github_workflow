@@ -57,6 +57,11 @@ jobs:
           echo "pr_body<<EOF" >> $GITHUB_OUTPUT
           echo "$PR_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create screenshots directory
+        run: |
+          mkdir -p /tmp/claude-qa-screenshots
+          chmod 777 /tmp/claude-qa-screenshots
 
       - name: Run Claude QA Testing
         uses: anthropics/claude-code-action@v1
