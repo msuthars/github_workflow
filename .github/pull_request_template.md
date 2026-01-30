@@ -11,3 +11,7 @@
 ## Testing steps
 
 [Add testing steps here that you want to test]
+
+## Other
+
+[Other thing that needs to be mention]
