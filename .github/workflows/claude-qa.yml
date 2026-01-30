@@ -60,8 +60,8 @@ jobs:
       
       - name: Create screenshots directory
         run: |
-          mkdir -p /tmp/claude-qa-screenshots
-          chmod 777 /tmp/claude-qa-screenshots
+          mkdir -p /tmp/qa-artifacts
+          chmod 777 /tmp/qa-artifacts
 
       - name: Run Claude QA Testing
         uses: anthropics/claude-code-action@v1
@@ -283,6 +283,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qa-screenshots-pr-${{ steps.pr-number.outputs.number }}
-          path: /tmp/claude-qa-screenshots/
+          path: /tmp/qa-artifacts
           retention-days: 30
           if-no-files-found: ignore
