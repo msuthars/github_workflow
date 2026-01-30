@@ -91,7 +91,7 @@ jobs:
             2. **SCREENSHOTS.txt** - List of screenshots with descriptions
             
             When taking screenshots during testing:
-            1. **Save ALL screenshots to**: `/tmp/claude-qa-screenshots/`
+            1. **Save ALL screenshots to**: `/tmp/qa-artifacts/`
             2. **Use simple numbered names**: `01.png`, `02.png`, `03.png`, etc.
             3. **Limit to 8-10 screenshots** (most important ones)
             4. **Take screenshots of**:
