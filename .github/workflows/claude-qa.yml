@@ -81,7 +81,14 @@ jobs:
             You are a QA engineer testing this pull request from a USER PERSPECTIVE.
             DO NOT look at the code - test the feature as described in the PR description.
 
-            ## IMPORTANT: Screenshot Instructions
+            ## IMPORTANT: Screenshot and Report Instructions
+
+            Playwright MCP will automatically save screenshots to the `.playwright-mcp/` directory.
+            You should also create your report files in the CURRENT WORKING DIRECTORY (not /tmp).
+
+            Create these files:
+            1. **REPORT.md** - Your main QA report
+            2. **SCREENSHOTS.txt** - List of screenshots with descriptions
             
             When taking screenshots during testing:
             1. **Save ALL screenshots to**: `/tmp/claude-qa-screenshots/`
@@ -116,10 +123,8 @@ jobs:
             5. Document any issues found
 
             ## Reporting Requirements
-            
-            After testing, create a report `REPORT.md` at .playwright-mcp:
-            
-            Structure your report like this:
+
+            Create **REPORT.md** in the current directory with this format:
             
             ```markdown
             - ✅ Tests that passed
@@ -128,7 +133,7 @@ jobs:
             - 💡 Recommendations for fixes
             ```
 
-            Also create `SCREENSHOTS.txt` at .playwright-mcp with one line per screenshot describing what it shows:
+            Create **SCREENSHOTS.txt** in the current directory describing each screenshot:
             ```
             01.png|Homepage initial load
             02.png|Login form with valid credentials
@@ -142,142 +147,136 @@ jobs:
             --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--isolated","--caps=vision,testing"]}}}'
             --allowed-tools "mcp__playwright__browser_navigate,mcp__playwright__browser_navigate_back,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_snapshot,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_console_messages,mcp__playwright__browser_wait_for,mcp__playwright__browser_hover,mcp__playwright__browser_resize,mcp__playwright__browser_drag,mcp__playwright__browser_select_option,mcp__playwright__browser_press_key,mcp__playwright__browser_tabs,mcp__playwright__browser_file_upload,mcp__playwright__browser_fill_form,mcp__playwright__browser_handle_dialog,mcp__playwright__browser_close,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:--name-only),Write"
     
-      - name: Copy screenshots from Playwright MCP directory
+      - name: Collect screenshots and reports
         if: always()
         run: |
-          # Copy all screenshots from .playwright-mcp
-          find .playwright-mcp -type f \( -name "*.png" -o -name "*.jpg" \) \
-            -exec cp {} /tmp/claude-qa-screenshots/ \;
-          
-          # Count and log
-          SCREENSHOT_COUNT=$(ls -1 /tmp/claude-qa-screenshots/*.png 2>/dev/null | wc -l)
-          echo "Copied $SCREENSHOT_COUNT screenshots"
+          echo "Collecting screenshots and reports..."
 
-      - name: Upload images to GitHub and create comment
+          # Create collection directory
+          mkdir -p /tmp/qa-artifacts
+
+          # Copy report files from working directory
+          if [ -f "REPORT.md" ]; then
+            echo "Found REPORT.md"
+            cp REPORT.md /tmp/qa-artifacts/
+          else
+            echo "REPORT.md not found in working directory"
+            ls -la | grep -i report || echo "No report files found"
+          fi
+
+          if [ -f "SCREENSHOTS.txt" ]; then
+            echo "Found SCREENSHOTS.txt"
+            cp SCREENSHOTS.txt /tmp/qa-artifacts/
+          else
+            echo "SCREENSHOTS.txt not found"
+          fi
+
+          # Copy screenshots from .playwright-mcp directory
+          if [ -d ".playwright-mcp" ]; then
+            echo "Found .playwright-mcp directory"
+            find .playwright-mcp -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" \) \
+              -exec cp {} /tmp/qa-artifacts/ \; 2>/dev/null || true
+          else
+            echo ".playwright-mcp directory not found"
+          fi
+
+          # Also check current directory for screenshots
+          find . -maxdepth 1 -type f \( -name "*.png" -o -name "*.jpg" \) \
+            -exec cp {} /tmp/qa-artifacts/ \; 2>/dev/null || true
+
+          # Show what we collected
+          echo "Collected files:"
+          ls -lh /tmp/qa-artifacts/ || echo "No files collected"
+
+          SCREENSHOT_COUNT=$(ls -1 /tmp/qa-artifacts/*.png /tmp/qa-artifacts/*.jpg 2>/dev/null | wc -l)
+          echo "Total screenshots: $SCREENSHOT_COUNT"
+
+      - name: Create and post PR comment with screenshots
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd /tmp/claude-qa-screenshots
-          
-          # Check if report exists
-          if [ ! -f "REPORT.md" ]; then
-            echo "No report found"
+          # Check if artifacts were collected
+          if [ ! -d "/tmp/qa-artifacts" ]; then
+            echo "No artifacts found"
             exit 0
           fi
-          
-          # Create Python script to upload images
-          cat > /tmp/upload_images.py << 'PYTHON_SCRIPT'
+
+          cd /tmp/qa-artifacts
+
+          # Install requests
+          pip3 install requests --quiet
+
+          # Create Python script to post comment
+          cat > /tmp/post_comment.py << 'PYTHON_SCRIPT'
           import os
           import sys
           import requests
-          import json
-          import base64
-          
+          from pathlib import Path
+
           github_token = os.environ['GH_TOKEN']
           repo = "${{ github.repository }}"
           pr_number = "${{ steps.pr-number.outputs.number }}"
-          
-          # Headers for GitHub API
+
           headers = {
               'Authorization': f'token {github_token}',
               'Accept': 'application/vnd.github.v3+json'
           }
-          
-          screenshot_dir = '/tmp/claude-qa-screenshots'
-          
-          # Read report
-          with open(f'{screenshot_dir}/REPORT.md', 'r') as f:
-              report = f.read()
-          
-          # Read screenshot descriptions if available
+
+          artifacts_dir = Path('/tmp/qa-artifacts')
+
+          # Read report if it exists
+          report_file = artifacts_dir / 'REPORT.md'
+          if report_file.exists():
+              with open(report_file, 'r') as f:
+                  report = f.read()
+          else:
+              report = "## 🧪 QA Test Report\n\n_Report file not found._\n"
+
+          # Read screenshot descriptions
           screenshot_descriptions = {}
-          desc_file = f'{screenshot_dir}/SCREENSHOTS.txt'
-          if os.path.exists(desc_file):
+          desc_file = artifacts_dir / 'SCREENSHOTS.txt'
+          if desc_file.exists():
               with open(desc_file, 'r') as f:
                   for line in f:
                       if '|' in line:
                           filename, desc = line.strip().split('|', 1)
                           screenshot_descriptions[filename] = desc
-          
-          # Start building comment
-          comment_body = report + "\n\n---\n\n### 📸 Screenshots\n\n"
-          
+
           # Find all screenshots
-          screenshots = sorted([f for f in os.listdir(screenshot_dir) 
-                               if f.endswith(('.png', '.jpg', '.jpeg'))])
-          
+          screenshots = sorted(list(artifacts_dir.glob('*.png')) + list(artifacts_dir.glob('*.jpg')))
+
+          # Build comment
+          comment_body = report + "\n\n---\n\n### 📸 Screenshots\n\n"
+
           if not screenshots:
-              comment_body += "_No screenshots were captured._\n"
+              comment_body += "_No screenshots were captured during testing._\n"
           else:
-              for screenshot in screenshots:
-                  filepath = os.path.join(screenshot_dir, screenshot)
-                  
-                  # Read image file
-                  with open(filepath, 'rb') as img_file:
-                      img_data = img_file.read()
-                  
-                  # Upload to GitHub's asset upload endpoint
-                  # We'll use the issue comments media upload endpoint
-                  upload_url = f'https://api.github.com/repos/{repo}/issues/{pr_number}/assets'
-                  
-                  files = {
-                      'file': (screenshot, img_data, 'image/png')
-                  }
-                  
-                  try:
-                      # Upload image
-                      response = requests.post(
-                          upload_url,
-                          headers={
-                              'Authorization': f'token {github_token}',
-                              'Accept': 'application/vnd.github.v3+json'
-                          },
-                          files=files
-                      )
-                      
-                      if response.status_code == 201:
-                          asset_data = response.json()
-                          image_url = asset_data.get('url') or asset_data.get('browser_download_url')
-                          
-                          # Add to comment
-                          desc = screenshot_descriptions.get(screenshot, screenshot)
-                          comment_body += f"#### {desc}\n\n"
-                          comment_body += f"![{desc}]({image_url})\n\n"
-                      else:
-                          print(f"Failed to upload {screenshot}: {response.status_code}")
-                          print(response.text)
-                          # Fallback: reference the file
-                          desc = screenshot_descriptions.get(screenshot, screenshot)
-                          comment_body += f"- `{screenshot}`: {desc}\n"
-                  except Exception as e:
-                      print(f"Error uploading {screenshot}: {e}")
-                      desc = screenshot_descriptions.get(screenshot, screenshot)
-                      comment_body += f"- `{screenshot}`: {desc}\n"
-              
-              # Add artifact download link
+              comment_body += f"**{len(screenshots)} screenshot(s) captured:**\n\n"
+
+              for idx, screenshot in enumerate(screenshots, 1):
+                  filename = screenshot.name
+                  desc = screenshot_descriptions.get(filename, filename)
+                  comment_body += f"{idx}. **{filename}**: {desc}\n"
+
+              # Add download link
               run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              comment_body += f"\n---\n\n**📦 Download all screenshots**: [Workflow Artifacts]({run_url}#artifacts)\n"
-          
+              comment_body += f"\n📦 **[Download all screenshots]({run_url}#artifacts)**\n"
+
           # Post comment
           comment_url = f'https://api.github.com/repos/{repo}/issues/{pr_number}/comments'
           comment_data = {'body': comment_body}
-          
+
           response = requests.post(comment_url, headers=headers, json=comment_data)
-          
+
           if response.status_code == 201:
-              print("Comment posted successfully!")
+              print("✅ Comment posted successfully!")
           else:
-              print(f"Failed to post comment: {response.status_code}")
+              print(f"❌ Failed to post comment: {response.status_code}")
               print(response.text)
-              sys.exit(1)
           PYTHON_SCRIPT
-          
-          # Install requests if needed
-          pip3 install requests --quiet
-          
-          # Run the upload script
-          python3 /tmp/upload_images.py
+
+          python3 /tmp/post_comment.py
 
       - name: Upload screenshots as artifacts (backup)
         if: always()
